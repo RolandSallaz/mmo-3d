@@ -15,7 +15,54 @@
         <button id="join" type="submit">Начать игру</button>
       </form>
       <p id="status" role="status"></p>
+      <p id="flight-help" hidden>ЛКМ — курс · ПКМ — огонь</p>
+      <button id="inventory-toggle" type="button" aria-haspopup="dialog" hidden>Инвентарь</button>
+      <dialog id="inventory" aria-labelledby="inventory-title">
+        <header class="inventory-header">
+          <h2 id="inventory-title">Инвентарь</h2>
+          <form method="dialog"><button type="submit" autofocus>Закрыть</button></form>
+        </header>
+        <div class="inventory-layout">
+          <section class="ship-panel" aria-labelledby="ship-title">
+            <div class="ship-brief">
+              <h3 id="ship-title">Лёгкий разведчик</h3>
+              <dl class="ship-stats">
+                <div><dt>Пилот</dt><dd id="inventory-pilot"></dd></div>
+                <div><dt>Макс. скорость</dt><dd id="ship-speed"></dd></div>
+                <div><dt>Скорость разворота</dt><dd id="ship-turn-speed"></dd></div>
+              </dl>
+            </div>
+            <div class="ship-schematic" role="group" aria-label="Слоты корабля">
+              <div class="ship-display">
+                <img class="ship-preview" src="/src/ship-profile.webp" width="480" height="480" alt="Лёгкий разведчик">
+              </div>
+              <div id="ship-slots" class="ship-slots"></div>
+            </div>
+          </section>
+          <section class="cargo-panel" aria-labelledby="cargo-title">
+            <div class="cargo-heading">
+              <h3 id="cargo-title">Грузовой отсек</h3>
+              <span id="cargo-count"></span>
+            </div>
+            <div id="cargo-grid" class="cargo-grid"></div>
+            <aside class="item-details" id="item-menu" aria-labelledby="item-title" hidden>
+              <div>
+                <strong id="item-title"></strong>
+                <p id="item-description"></p>
+              </div>
+              <button id="item-action" type="button" hidden></button>
+              <button id="item-menu-close" type="button" aria-label="Закрыть информацию о предмете">×</button>
+            </aside>
+          </section>
+        </div>
+      </dialog>
+      <button id="fullscreen" type="button" title="F" hidden>На весь экран</button>
       <canvas id="world" width="640" height="640" aria-label="Космическое поле" hidden></canvas>
+      <div id="object-tooltip" hidden>
+        <strong id="object-name"></strong>
+        <span id="object-health" hidden></span>
+      </div>
+      <canvas id="minimap" width="168" height="168" aria-label="Миникарта. Нажмите, чтобы задать курс" hidden></canvas>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>

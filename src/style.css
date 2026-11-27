@@ -1,15 +1,488 @@
 :root {
   color-scheme: dark;
   color: #fff;
-  background-color: #000;
+  background: #03050d url("./nebula.webp") center / cover no-repeat fixed;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  padding: 16px;
+}
+
+h1, #menu, #status, #fullscreen {
+  position: relative;
+  z-index: 1;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+#menu {
+  margin-top: 1rem;
+}
+
+#status {
+  margin: 0.5rem 0 0;
+}
+
+h1, #status {
+  width: fit-content;
+  pointer-events: none;
+  text-shadow: 0 1px 4px #000;
+}
+
+#fullscreen {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #8fa4d866;
+  border-radius: 6px;
+  background: #10182be6;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
 }
 
 #world {
-  width: min(100%, 640px, 75vh);
-  height: auto;
-  margin-inline: auto;
+  touch-action: none;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
 }
 
 #world:not([hidden]) {
   display: block;
+}
+
+#minimap {
+  position: fixed;
+  top: 72px;
+  right: 16px;
+  z-index: 1;
+  width: min(168px, 32vw);
+  height: auto;
+  border-radius: 8px;
+  outline: 1px solid #91a7d46b;
+  background: #080f20e6;
+  cursor: crosshair;
+}
+
+#minimap:not([hidden]) {
+  display: block;
+}
+
+#object-tooltip {
+  position: fixed;
+  z-index: 2;
+  max-width: min(15rem, calc(100vw - 24px));
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #82b5da80;
+  border-radius: 6px;
+  background: #081223f2;
+  color: #e4f6ff;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+#inventory-toggle,
+#inventory button:not(.inventory-item) {
+  border: 1px solid #86a4db66;
+  border-radius: 7px;
+  background: #14223c;
+  color: #eef6ff;
+  padding: 0.55rem 0.8rem;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+#inventory-toggle {
+  position: fixed;
+  z-index: 1;
+  bottom: 16px;
+  left: 16px;
+}
+
+#inventory {
+  --inventory-cell-size: clamp(32px, calc((100vw - 120px) / 6), 56px);
+  box-sizing: border-box;
+  width: min(720px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: clamp(14px, 3vw, 24px);
+  border: 1px solid #698bc47a;
+  border-radius: 14px;
+  background: linear-gradient(140deg, #172846, #0b1425 60%);
+  color: #edf5ff;
+  box-shadow: 0 28px 90px #000a;
+}
+
+#inventory::backdrop {
+  background: #030711bd;
+}
+
+.inventory-header,
+.cargo-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inventory-header {
+  margin-bottom: 16px;
+}
+
+.inventory-header h2,
+.inventory-layout h3,
+.item-details p {
+  margin: 0;
+}
+
+.inventory-layout h3 {
+  font-size: 1rem;
+}
+
+.inventory-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.ship-panel,
+.cargo-panel {
+  min-width: 0;
+  padding: clamp(10px, 2vw, 16px);
+  border: 1px solid #7594d34d;
+  border-radius: 10px;
+  background: #090f1ed1;
+}
+
+.ship-brief {
+  display: grid;
+  gap: 8px;
+}
+
+.ship-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.ship-stats div {
+  min-width: 0;
+  padding: 5px 8px;
+  border-left: 2px solid #6f9fd077;
+  background: #19284480;
+}
+
+.ship-stats dt,
+#cargo-count,
+.item-details p {
+  color: #a9b9d5;
+}
+
+.ship-stats dd {
+  margin: 2px 0 0;
+  color: #f0f7ff;
+  overflow-wrap: anywhere;
+}
+
+.ship-schematic {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(75px, 1fr) minmax(110px, 2.25fr) minmax(75px, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 10px;
+  min-height: clamp(148px, 33vw, 220px);
+}
+
+.ship-display {
+  position: relative;
+  display: grid;
+  place-items: center;
+  grid-area: 1 / 2 / 4 / 3;
+  width: min(100%, 226px);
+  aspect-ratio: 1;
+  justify-self: center;
+  isolation: isolate;
+}
+
+.ship-display::before {
+  position: absolute;
+  inset: 7%;
+  z-index: -1;
+  border: 1px solid #6287b96b;
+  border-radius: 50%;
+  background:
+    repeating-linear-gradient(0deg, #527ba825 0 1px, transparent 1px 16px),
+    repeating-linear-gradient(90deg, #527ba825 0 1px, transparent 1px 16px),
+    radial-gradient(circle, #243c6466, #15294380 58%, #0c192d);
+  box-shadow: inset 0 0 0 6px #0c172e99, 0 0 22px #477fb328;
+  content: "";
+}
+
+.ship-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.ship-slots {
+  display: contents;
+}
+
+.ship-slot.inventory-item {
+  position: relative;
+  box-sizing: border-box;
+  width: var(--inventory-cell-size);
+  height: var(--inventory-cell-size);
+  aspect-ratio: 1;
+  border: 1px solid #7095cb99;
+  border-radius: 7px;
+  background: radial-gradient(ellipse at top, #28406a, #12223b 74%);
+}
+
+.ship-slot[data-slot="weapon-left"] {
+  grid-area: 1 / 1;
+}
+
+.ship-slot[data-slot="weapon-right"] {
+  grid-area: 1 / 3;
+}
+
+.ship-slot[data-slot="engine"] {
+  grid-area: 2 / 1;
+}
+
+.ship-slot[data-slot="shield"] {
+  grid-area: 2 / 3;
+}
+
+.ship-slot[data-slot="module"] {
+  grid-area: 3 / 1;
+}
+
+.ship-slot[data-slot="weapon-left"],
+.ship-slot[data-slot="engine"],
+.ship-slot[data-slot="module"] {
+  justify-self: end;
+}
+
+.ship-slot::after {
+  position: absolute;
+  width: 14px;
+  top: 50%;
+  right: 100%;
+  border-top: 1px dashed #79a7d081;
+  content: "";
+  pointer-events: none;
+}
+
+.ship-slot[data-slot="weapon-left"]::after,
+.ship-slot[data-slot="engine"]::after,
+.ship-slot[data-slot="module"]::after {
+  right: auto;
+  left: 100%;
+}
+
+.ship-slot.slot-empty .inventory-icon {
+  opacity: 0.30;
+  filter: grayscale(0.75);
+}
+
+.ship-slot.inventory-item:hover {
+  background: #1c314e;
+}
+
+.ship-slot.inventory-item.slot-compatible,
+.ship-slot.inventory-item[aria-pressed="true"] {
+  border-color: #80d9f4;
+  background: #234967;
+}
+.cargo-grid {
+  display: grid;
+  grid-template-columns: repeat(8, var(--inventory-cell-size));
+  gap: 5px;
+  justify-content: center;
+  margin: 12px auto;
+}
+
+.cargo-cell {
+  box-sizing: border-box;
+  width: var(--inventory-cell-size);
+  height: var(--inventory-cell-size);
+  aspect-ratio: 1;
+  min-width: 0;
+  border: 1px solid #6585bd49;
+  border-radius: 6px;
+  background: #141e32;
+}
+
+.inventory-item {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: #233c60;
+  color: #bceaff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.inventory-item:hover {
+  background: #29466a;
+}
+
+.inventory-item[aria-pressed="true"] {
+  border-color: #80d9f4;
+  background: #31577d;
+}
+
+.inventory-icon {
+  display: block;
+  width: 94%;
+  height: 94%;
+  background-image: url("./inventory-icons.webp");
+  background-size: 300% 200%;
+  background-repeat: no-repeat;
+}
+
+.item-details {
+  position: fixed;
+  z-index: 4;
+  box-sizing: border-box;
+  display: grid;
+  gap: 10px;
+  width: min(248px, calc(100vw - 16px));
+  padding: 12px 38px 12px 12px;
+  border: 1px solid #73a3cc9e;
+  border-radius: 9px;
+  background: #101e34;
+  box-shadow: 0 6px 25px #000b;
+  font-size: 0.875rem;
+}
+
+.item-details[hidden] {
+  display: none;
+}
+
+.item-details p {
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+#inventory #item-menu-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 0;
+  width: 25px;
+  height: 25px;
+  line-height: 1;
+  font-size: 1.05rem;
+}
+
+#inventory .drop-compatible {
+  border-color: #70c6e2;
+  box-shadow: inset 0 0 0 1px #70c6e24d;
+}
+#inventory button[hidden] {
+  display: none;
+}
+
+#inventory button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+#inventory button:focus-visible,
+#inventory-toggle:focus-visible {
+  outline: 2px solid #91e2ff;
+  outline-offset: 2px;
+}
+
+@media (max-width: 620px) {
+  .ship-schematic {
+    grid-template-columns: minmax(62px, 1fr) minmax(82px, 1.6fr) minmax(62px, 1fr);
+    column-gap: 7px;
+  }
+
+  .ship-slot::after {
+    width: 7px;
+  }
+
+  .cargo-grid {
+    grid-template-columns: repeat(6, var(--inventory-cell-size));
+  }
+}
+
+.inventory-item:not(.slot-empty) {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+#inventory .drag-source {
+  opacity: 0.4;
+}
+
+#inventory .drop-target {
+  border-color: #b2f8ff;
+  box-shadow: 0 0 0 2px #79dced, 0 0 14px #79dced80;
+}
+
+.inventory-drag-ghost {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: var(--inventory-cell-size);
+  height: var(--inventory-cell-size);
+  transform: translate(-50%, -50%);
+  border: 1px solid #b2f8ff;
+  border-radius: 7px;
+  background: #234967ed;
+  color: #c8fcff;
+  font-size: 1.45rem;
+  pointer-events: none;
+}
+
+.inventory-drag-ghost[hidden] {
+  display: none;
+}
+
+#flight-help {
+  position: relative;
+  z-index: 1;
+  width: fit-content;
+  margin: 0.4rem 0 0;
+  color: #adbedc;
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+#object-health:not([hidden]) {
+  display: block;
+  margin-top: 4px;
+  color: #b4d2eb;
+  white-space: pre-line;
 }
