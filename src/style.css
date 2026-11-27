@@ -3,3 +3,13 @@
   color: #fff;
   background-color: #000;
 }
+
+#world {
+  width: min(100%, 640px, 75vh);
+  height: auto;
+  margin-inline: auto;
+}
+
+#world:not([hidden]) {
+  display: block;
+}
