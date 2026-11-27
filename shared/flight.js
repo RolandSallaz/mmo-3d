@@ -7,16 +7,6 @@ function headingDifference(from, to) {
   return Math.atan2(Math.sin(difference), Math.cos(difference));
 }
 
-export function turnToward(ship, target, seconds) {
-  const dx = target.x - ship.x;
-  const dy = target.y - ship.y;
-  if (!dx && !dy) return;
-  const heading = Math.atan2(dx, -dy);
-  const turn = headingDifference(ship.heading, heading);
-  const limit = engineModel(ship.engineModel).turnSpeed * seconds;
-  ship.heading = Math.abs(turn) <= limit ? heading : ship.heading + Math.sign(turn) * limit;
-}
-
 export function advanceFlight(ship, destination, seconds, worldSize) {
   const dx = destination.x - ship.x;
   const dy = destination.y - ship.y;

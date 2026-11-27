@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { createInventory, moveInventoryItem } from "./inventory.js";
+import { createInventory, upgradeInventory, moveInventoryItem } from "./inventory.js";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("Set DATABASE_URL before starting the game server.");
@@ -23,12 +23,12 @@ export async function loadCharacter(characterId, nickname) {
     INSERT INTO player_inventory (character_id, nickname, inventory)
     VALUES ($1, $2, $3) ON CONFLICT (character_id) DO NOTHING
   `, [characterId, nickname, createInventory()]);
+  const state = await applyInventoryMove(characterId);
   const { rows: [row] } = await pool.query(
-    "SELECT nickname, inventory, revision FROM player_inventory WHERE character_id = $1", [characterId],
+    "SELECT nickname FROM player_inventory WHERE character_id = $1", [characterId],
   );
-  return { nickname: row.nickname, equipment: row.inventory.equipment, revision: row.revision };
+  return { nickname: row.nickname, equipment: state.equipment, revision: state.revision };
 }
-
 export async function getInventory(characterId) {
   const { rows: [row] } = await pool.query(
     "SELECT inventory, revision FROM player_inventory WHERE character_id = $1", [characterId],
@@ -45,7 +45,9 @@ export async function applyInventoryMove(characterId, message) {
     );
     const { inventory } = row;
     let { revision } = row;
-    if (message?.revision === revision && moveInventoryItem(inventory, message.source, message.destination)) {
+    const moved = message?.revision === revision && moveInventoryItem(inventory, message.source, message.destination);
+    const upgraded = upgradeInventory(inventory);
+    if (moved || upgraded) {
       revision++;
       await client.query(
         "UPDATE player_inventory SET inventory = $2, revision = $3 WHERE character_id = $1",

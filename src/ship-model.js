@@ -7,6 +7,9 @@ import pirateUrl from "./pirate-ship.glb?url";
 
 import { CAMERA_ELEVATION_SINE, SHIP_HULL_Y, SHIP_VIEW_SPAN, shipYaw, weaponMount } from "../shared/ship-geometry.js";
 
+import { WEAPON_MOUNTS } from "../shared/equipment.js";
+import { createMissileModels } from "./missile-model.js";
+import { createEngineEffects } from "./engine-effect.js";
 import { createShipWeaponModels } from "./ship-weapons.js";
 
 export async function createShipRenderer(spriteSize) {
@@ -43,6 +46,8 @@ export async function createShipRenderer(spriteSize) {
 
   const units = SHIP_VIEW_SPAN / spriteSize;
   const weaponModels = createShipWeaponModels();
+  const engineEffects = createEngineEffects();
+  const updateMissiles = createMissileModels(scene, units);
   const instances = [];
   let previousWidth = 0;
   let previousHeight = 0;
@@ -50,7 +55,7 @@ export async function createShipRenderer(spriteSize) {
   let dirty = true;
   canvas.addEventListener("webglcontextrestored", () => { dirty = true; });
 
-  return (entries, width, height, ratio) => {
+  return (entries, width, height, ratio, time, missiles = []) => {
     if (context.isContextLost()) return null;
 
     const pixelRatio = Math.min(ratio, 1.5);
@@ -70,22 +75,39 @@ export async function createShipRenderer(spriteSize) {
 
     while (instances.length < entries.length) {
       const group = new Group();
+      const attitude = new Group();
       const hull = new Group();
-      const mounts = [weaponModels.socket.clone(), weaponModels.socket.clone()];
-      group.add(hull, ...mounts);
+      const mounts = WEAPON_MOUNTS.map(() => weaponModels.socket.clone());
+      const jets = engineEffects.create();
+      attitude.add(hull, jets, ...mounts);
+      group.add(attitude);
       scene.add(group);
-      instances.push({ group, hull, mounts, mounted: ["", ""], source: null });
+      instances.push({ group, attitude, hull, jets, mounts, idleBlend: 0, poseTime: undefined, mounted: WEAPON_MOUNTS.map(() => ""), source: null });
       dirty = true;
     }
 
     for (const [index, instance] of instances.entries()) {
-      const { group, hull, mounts, mounted } = instance;
+      const { group, attitude, hull, jets, mounts, mounted } = instance;
       const entry = entries[index];
       if (group.visible !== Boolean(entry)) {
         group.visible = Boolean(entry);
         dirty = true;
       }
       if (!entry) continue;
+      if (engineEffects.update(jets, entry.sprite, time)) dirty = true;
+      if (time !== undefined) {
+        const idle = jets.visible ? 0 : 1;
+        const elapsed = Math.max(0, time - (instance.poseTime ?? time - 16));
+        instance.poseTime = time;
+        const previous = instance.idleBlend;
+        const step = elapsed * 0.005;
+        instance.idleBlend += Math.max(-step, Math.min(step, idle - previous));
+        const phase = time / 700 + index * 1.83;
+        attitude.rotation.z = Math.sin(phase) * 0.063 * instance.idleBlend;
+        attitude.rotation.x = Math.sin(phase * 0.76 + 0.6) * 0.031 * instance.idleBlend;
+        attitude.position.y = Math.sin(phase * 1.2) * 0.065 * instance.idleBlend;
+        if (previous || instance.idleBlend) dirty = true;
+      }
       const source = entry.sprite.model === "pirate" ? pirate.scene : civilian.scene;
       if (instance.source !== source) {
         hull.clear();
@@ -99,19 +121,26 @@ export async function createShipRenderer(spriteSize) {
         instance.source = source;
         dirty = true;
       }
-      const equipped = [entry.sprite.weaponLeft, entry.sprite.weaponRight];
+      const equipped = WEAPON_MOUNTS.map(({ field }) => entry.sprite[field]);
       for (const [slotIndex, model] of equipped.entries()) {
         const next = Object.hasOwn(weaponModels.weapons, model) ? model : "";
-        if (mounted[slotIndex] === next) continue;
         const mount = mounts[slotIndex];
-        if (mounted[slotIndex]) mount.remove(mount.getObjectByName("weapon"));
-        if (next) {
-          const weapon = weaponModels.weapons[next].clone();
-          weapon.name = "weapon";
-          mount.add(weapon);
+        let weapon = mount.getObjectByName("weapon");
+        if (mounted[slotIndex] !== next) {
+          if (weapon) mount.remove(weapon);
+          weapon = next ? weaponModels.weapons[next].clone() : undefined;
+          if (weapon) {
+            weapon.name = "weapon";
+            mount.add(weapon);
+          }
+          mounted[slotIndex] = next;
+          dirty = true;
         }
-        mounted[slotIndex] = next;
-        dirty = true;
+        const yaw = entry.aim?.[slotIndex]?.yaw ?? 0;
+        if (weapon && weapon.rotation.y !== yaw) {
+          weapon.rotation.y = yaw;
+          dirty = true;
+        }
       }
       const x = (entry.x - width / 2) * units;
       const z = (entry.y - height / 2) * units / CAMERA_ELEVATION_SINE;
@@ -122,6 +151,8 @@ export async function createShipRenderer(spriteSize) {
         dirty = true;
       }
     }
+
+    if (updateMissiles(missiles, width, height)) dirty = true;
 
     if (dirty) {
       renderer.render(scene, camera);

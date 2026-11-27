@@ -1,47 +1,52 @@
 import { createHash } from "node:crypto";
 import { fireLasers } from "./laser.js";
+import { advanceMissile, missileSalvos } from "./missiles.js";
 import { ErrorCode, Room, ServerError, defineRoom, defineServer } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { schema } from "@colyseus/schema";
-import { LASER_MODELS, SHIELD_MODELS } from "../shared/equipment.js";
-import { advanceFlight, FLIGHT_TICK_MS, turnToward } from "../shared/flight.js";
-import { planetPosition } from "../shared/world.js";
+import { MISSILE_MODEL, SHIELD_MODELS, WEAPON_MOUNTS } from "../shared/equipment.js";
+import { advanceFlight, FLIGHT_TICK_MS } from "../shared/flight.js";
+import { advanceSafeFlight, planFlight } from "../shared/solar-navigation.js";
+import { SUN_HEAT_RADIUS, planetPosition, sunPosition } from "../shared/world.js";
 
 import { applyInventoryMove, getInventory, initializeInventoryStore, loadCharacter } from "./inventory-store.js";
 
 const WORLD_SIZE = 65_536;
-const PLANET = planetPosition(WORLD_SIZE);
+const SUN = sunPosition(WORLD_SIZE);
+const SOLAR_DAMAGE = 6;
+const SOLAR_DAMAGE_INTERVAL = 500;
+const orbitStartedAt = performance.now();
 const PIRATE_ORBIT_RADIUS = 222;
 const PIRATE_ORBIT_SPEED = 0.52;
 const PIRATE_START_ANGLE = Math.PI * 0.42;
 const PLAYER_HP = 100;
 const PIRATE_HP = 150;
 const TEST_SHIP_HP = 110;
-const PURSUIT_DISTANCE = 145;
-const ATTACK_DISTANCE = 170;
+const MAX_MISSILES = 640;
 const RESPAWN_MS = 5000;
 const SHIELD_RECHARGE_DELAY = 3800;
 const SHIELD_RECHARGE_RATE = 15;
 const HULL = { hp: "uint16", maxHp: "uint16", shield: "float32", maxShield: "uint16" };
 
-function placePirate(pirate, angle) {
+function placePirate(pirate, angle, planet) {
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
-  pirate.x = PLANET.x + cos * PIRATE_ORBIT_RADIUS;
-  pirate.y = PLANET.y + sin * PIRATE_ORBIT_RADIUS;
+  pirate.x = planet.x + cos * PIRATE_ORBIT_RADIUS;
+  pirate.y = planet.y + sin * PIRATE_ORBIT_RADIUS;
   pirate.heading = Math.atan2(-sin, -cos);
 }
-const WEAPON_SLOTS = { weaponLeft: "string", weaponRight: "string" };
-const Player = schema({ nickname: "string", x: "float32", y: "float32", heading: "float32", online: "boolean", attackTarget: "string", engineModel: "string", shieldModel: "string", ...HULL, ...WEAPON_SLOTS });
+const WEAPON_SLOTS = Object.fromEntries(WEAPON_MOUNTS.map(({ field }) => [field, "string"]));
+const Player = schema({ nickname: "string", x: "float32", y: "float32", heading: "float32", online: "boolean", attackTarget: "string", engineModel: "string", shieldModel: "string", ...HULL, ...WEAPON_SLOTS, landing: "string" });
 const TestShip = schema({ x: "float32", y: "float32", heading: "float32", shieldModel: "string", ...HULL, ...WEAPON_SLOTS });
-const WorldState = schema({ size: "uint32", players: { map: Player }, testShip: TestShip, pirate: TestShip });
+const Missile = schema({ x: "float32", y: "float32", heading: "float32", hp: "uint8", owner: "string" });
+const WorldState = schema({ size: "uint32", players: { map: Player }, testShip: TestShip, pirate: TestShip, missiles: { map: Missile }, orbitSeconds: "uint32" });
 const spawnPoints = Array.from({ length: 36 }, (_, index) => {
   const cell = (index + 14) % 36;
   return {
     x: WORLD_SIZE / 2 + (cell % 6 - 2) * 96,
     y: WORLD_SIZE / 2 + (Math.floor(cell / 6) - 2) * 96,
   };
-});
+}).filter(({ x, y }) => Math.hypot(x - SUN.x, y - SUN.y) >= SUN_HEAT_RADIUS + 48);
 
 const activeLoadouts = new Map();
 
@@ -52,14 +57,12 @@ function updateLoadout(characterId, { equipment, revision }) {
     loadout.revision = revision;
     loadout.engineModel = equipment.engine ?? "";
     loadout.shieldModel = equipment.shield ?? "";
-    loadout.weaponLeft = equipment["weapon-left"] ?? "";
-    loadout.weaponRight = equipment["weapon-right"] ?? "";
+    for (const { id, field } of WEAPON_MOUNTS) loadout[field] = equipment[id] ?? "";
   }
   for (const player of loadout.players) {
     player.engineModel = loadout.engineModel;
     player.shieldModel = loadout.shieldModel;
-    player.weaponLeft = loadout.weaponLeft;
-    player.weaponRight = loadout.weaponRight;
+    for (const { field } of WEAPON_MOUNTS) player[field] = loadout[field];
     player.maxShield = SHIELD_MODELS[loadout.shieldModel]?.capacity ?? 0;
     player.shield = Math.min(player.shield, player.maxShield);
   }
@@ -76,12 +79,16 @@ class WorldRoom extends Room {
     pirate: new TestShip({ hp: PIRATE_HP, maxHp: PIRATE_HP, shield: 45, maxShield: 45, shieldModel: "shield" }),
   });
   destinations = new Map();
+  approaches = new Map();
   laserReadyAt = new Map();
+  missileTargets = new Map();
+  missileSequence = 0;
   lastHitAt = new WeakMap();
+  solarDamageAt = new WeakMap();
   pirateAngle = PIRATE_START_ANGLE;
 
   onCreate() {
-    placePirate(this.state.pirate, this.pirateAngle);
+    this.updateOrbit(performance.now());
     const sendInventory = async (client, read) => {
       try {
         const inventory = await read();
@@ -98,13 +105,12 @@ class WorldRoom extends Room {
       sendInventory(client, () => applyInventoryMove(client.auth.characterId, message)));
     this.onMessage("attack", (client, targetId) => {
       const player = this.state.players.get(client.sessionId);
-      if (!player?.online || !player.hp) return;
-      if (targetId === "") {
+      if (!player?.online || !player.hp || player.landing) return;
+      if (targetId === "" || targetId === player.attackTarget) {
         player.attackTarget = "";
         return;
       }
       if (!this.findAttackTarget(client.sessionId, targetId)) return;
-      this.destinations.delete(client.sessionId);
       player.attackTarget = targetId;
     });
     this.onMessage("move", (client, destination) => {
@@ -113,76 +119,143 @@ class WorldRoom extends Room {
       const player = this.state.players.get(client.sessionId);
       if (!Number.isFinite(x) || !Number.isFinite(y) ||
           x < 0 || x > WORLD_SIZE || y < 0 || y > WORLD_SIZE ||
-          !player?.online || !player.hp) return;
+          !player?.online || !player.hp || (player.landing && player.landing !== "approach")) return;
 
+      this.approaches.delete(client.sessionId);
+      player.landing = "";
+      const direct = destination.direct === true;
+      const route = planFlight(player, { x, y }, WORLD_SIZE, direct);
+      this.destinations.set(client.sessionId, { route, direct });
+      client.send("flight:route", route);
+    });
+    this.onMessage("planet:land", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player?.online || !player.hp || player.landing) return;
+      this.destinations.delete(client.sessionId);
       player.attackTarget = "";
-
-      this.destinations.set(client.sessionId, { x, y });
+      player.landing = "approach";
+      this.approaches.set(client.sessionId, { route: [], refreshAt: 0 });
+    });
+    this.onMessage("planet:launch", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player?.online || player.landing !== "landed") return;
+      const planet = planetPosition(WORLD_SIZE, performance.now() - orbitStartedAt);
+      const dx = planet.x - SUN.x;
+      const dy = planet.y - SUN.y;
+      const distance = Math.hypot(dx, dy);
+      player.x = planet.x + dx * 190 / distance;
+      player.y = planet.y + dy * 190 / distance;
+      player.heading = Math.atan2(dx, -dy);
+      player.landing = "";
     });
 
     this.setSimulationInterval((deltaMs) => {
       const seconds = Math.min(deltaMs, 100) / 1000;
       this.pirateAngle = (this.pirateAngle + PIRATE_ORBIT_SPEED * seconds) % (2 * Math.PI);
-      placePirate(this.state.pirate, this.pirateAngle);
       const now = performance.now();
+      this.updateOrbit(now);
       for (const player of this.state.players.values()) this.rechargeShield(player, seconds, now);
       this.rechargeShield(this.state.pirate, seconds, now);
-      for (const [id, destination] of this.destinations) {
+      for (const [id, { route, direct }] of this.destinations) {
         const player = this.state.players.get(id);
-        if (advanceFlight(player, destination, seconds, WORLD_SIZE)) {
-          this.destinations.delete(id);
+        const fly = direct ? advanceFlight : advanceSafeFlight;
+        if (fly(player, route[0], seconds, WORLD_SIZE)) {
+          route.shift();
+          if (!route.length) this.destinations.delete(id);
+          this.clients.getById(id)?.send("flight:route", route);
         }
       }
+      this.updateMissiles(seconds, now);
       for (const client of this.clients) {
         const player = this.state.players.get(client.sessionId);
+        if (player?.landing === "approach" && player.hp) this.approachPlanet(client, player, seconds, now);
+        if (player?.landing === "landing" || player?.landing === "landed") continue;
+        if (player?.online && player.hp && this.applySolarDamage(player, client, now)) continue;
         if (player?.online && player.hp && player.attackTarget) {
-          this.updateAttack(client, player, seconds, now);
+          this.updateAttack(client, player, now);
         }
       }
     }, FLIGHT_TICK_MS);
   }
 
-  findAttackTarget(attackerId, targetId) {
-    if (typeof targetId !== "string" || targetId === attackerId) return;
-    if (targetId === "npc:pirate" || targetId === "npc:test") {
-      const ship = targetId === "npc:pirate" ? this.state.pirate : this.state.testShip;
-      return ship.hp ? { ship } : undefined;
+  approachPlanet(client, player, seconds, now) {
+    const approach = this.approaches.get(client.sessionId);
+    if (!approach) return;
+    const planet = planetPosition(WORLD_SIZE, now - orbitStartedAt);
+    const distance = Math.hypot(player.x - planet.x, player.y - planet.y);
+    if (distance <= 10) {
+      Object.assign(player, planet);
+      player.landing = "landing";
+      this.approaches.delete(client.sessionId);
+      client.send("flight:route", []);
+      this.clock.setTimeout(() => {
+        if (player.landing === "landing") player.landing = "landed";
+      }, 1700);
+      return;
     }
-    const ship = this.state.players.get(targetId);
-    if (ship?.online && ship.hp) return { id: targetId, ship };
+    if (!approach.route.length || now >= approach.refreshAt) {
+      approach.route = planFlight(player, planet, WORLD_SIZE);
+      approach.refreshAt = now + (distance < 100 ? 250 : 700);
+      client.send("flight:route", approach.route);
+    }
+    if (advanceSafeFlight(player, approach.route[0], seconds, WORLD_SIZE)) approach.route.shift();
   }
 
-  updateAttack(client, player, seconds, now) {
+  updateOrbit(now) {
+    const elapsed = now - orbitStartedAt;
+    this.state.orbitSeconds = Math.floor(elapsed / 1000);
+    placePirate(this.state.pirate, this.pirateAngle, planetPosition(WORLD_SIZE, elapsed));
+  }
+
+  findAttackTarget(attackerId, targetId) {
+    if (typeof targetId !== "string" || targetId === attackerId) return;
+    if (targetId.startsWith("missile:")) {
+      const missileId = targetId.slice("missile:".length);
+      const ship = this.state.missiles.get(missileId);
+      return ship?.hp && ship.owner !== attackerId ? { missileId, ship } : undefined;
+    }
+    if (targetId === "npc:pirate" || targetId === "npc:test") {
+      const ship = targetId === "npc:pirate" ? this.state.pirate : this.state.testShip;
+      return ship.hp ? { ship, effectId: targetId } : undefined;
+    }
+    const ship = this.state.players.get(targetId);
+    if (ship?.online && ship.hp && ship.landing !== "landed" && ship.landing !== "landing") return { id: targetId, ship };
+  }
+
+  updateAttack(client, player, now) {
     const target = this.findAttackTarget(client.sessionId, player.attackTarget);
     if (!target) {
       player.attackTarget = "";
       return;
     }
 
-    const dx = target.ship.x - player.x;
-    const dy = target.ship.y - player.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance > PURSUIT_DISTANCE) {
-      const approach = (distance - PURSUIT_DISTANCE) / distance;
-      advanceFlight(player, { x: player.x + dx * approach, y: player.y + dy * approach }, seconds, WORLD_SIZE);
-    } else if (LASER_MODELS[player.weaponLeft]?.fireCone !== undefined ||
-               LASER_MODELS[player.weaponRight]?.fireCone !== undefined) {
-      turnToward(player, target.ship, seconds);
+    const canLaunch = target.missileId === undefined &&
+      WEAPON_MOUNTS.some(({ field }) => player[field] === "missile");
+    const readyAt = this.laserReadyAt.get(client.sessionId) ?? WEAPON_MOUNTS.map(() => 0);
+    if (canLaunch) {
+      const launches = missileSalvos(player, target.ship, readyAt, now, WORLD_SIZE,
+        MAX_MISSILES - this.state.missiles.size);
+      if (launches.length) this.broadcast("missile:launch", { x: player.x, y: player.y });
+      for (const launch of launches) {
+        const id = String(this.missileSequence++);
+        this.state.missiles.set(id, new Missile({
+          ...launch, hp: MISSILE_MODEL.missileHp, owner: client.sessionId,
+        }));
+        this.missileTargets.set(id, { target, launchedAt: now });
+        this.laserReadyAt.set(client.sessionId, readyAt);
+      }
     }
-    if (Math.hypot(target.ship.x - player.x, target.ship.y - player.y) > ATTACK_DISTANCE) return;
-
-    const readyAt = this.laserReadyAt.get(client.sessionId) ?? [0, 0];
-    const shots = fireLasers(player, target.ship, readyAt, now, WORLD_SIZE);
+    const shots = fireLasers(player, target.ship, readyAt, now, WORLD_SIZE, target.missileId !== undefined ? 4 : undefined);
     if (!shots.length) return;
 
     this.laserReadyAt.set(client.sessionId, readyAt);
     const effects = [];
     for (const { damage, slotIndex, cooldown, ...shot } of shots) {
       readyAt[slotIndex] = now + cooldown;
-      const destroyed = this.damageShip(target, damage, now);
+      const destroyed = this.damageShip(target, damage, now, client.sessionId);
       effects.push({
         ...shot, shooterId: client.sessionId, slotIndex, hit: true, destroyed,
-        explosion: destroyed ? { x: target.ship.x, y: target.ship.y } : undefined,
+        explosion: destroyed && target.missileId === undefined ? { x: target.ship.x, y: target.ship.y } : undefined,
       });
       if (destroyed) {
         player.attackTarget = "";
@@ -192,22 +265,69 @@ class WorldRoom extends Room {
     this.broadcast("laser:shots", effects);
   }
 
+  updateMissiles(seconds, now) {
+    const impacts = [];
+    for (const [id, { target, launchedAt }] of this.missileTargets) {
+      const missile = this.state.missiles.get(id);
+      const landed = target.ship.landing === "landing" || target.ship.landing === "landed";
+      const result = landed ? "expired" : advanceMissile(missile, target.ship, (now - launchedAt) / 1000, seconds, WORLD_SIZE);
+      if (result === "flying") continue;
+      if (result === "hit") {
+        const destroyed = this.damageShip(target, MISSILE_MODEL.damage, now, missile.owner);
+        impacts.push({
+          x: missile.x, y: missile.y,
+          explosion: destroyed && target.missileId === undefined ? { x: target.ship.x, y: target.ship.y } : undefined,
+        });
+      }
+      this.state.missiles.delete(id);
+      this.missileTargets.delete(id);
+    }
+    if (impacts.length) this.broadcast("missile:impacts", impacts);
+  }
+
   rechargeShield(ship, seconds, now) {
     if (!ship.hp || ship.shield >= ship.maxShield || now - (this.lastHitAt.get(ship) ?? -Infinity) < SHIELD_RECHARGE_DELAY) return;
     ship.shield = Math.min(ship.maxShield, ship.shield + SHIELD_RECHARGE_RATE * seconds);
   }
 
-  damageShip({ ship, id }, damage, now) {
+  applySolarDamage(ship, client, now) {
+    if (Math.hypot(ship.x - SUN.x, ship.y - SUN.y) >= SUN_HEAT_RADIUS ||
+        now < (this.solarDamageAt.get(ship) ?? 0)) return false;
+    this.solarDamageAt.set(ship, now + SOLAR_DAMAGE_INTERVAL);
+    client.send("solar:hit");
+    if (!this.damageShip({ ship, id: client.sessionId }, SOLAR_DAMAGE, now)) return false;
+    this.broadcast("ship:explosion", { x: ship.x, y: ship.y });
+    return true;
+  }
+
+  damageShip({ ship, id, missileId, effectId }, damage, now, attackerId) {
     if (!ship.hp) return false;
 
-    this.lastHitAt.set(ship, now);
-    const absorbed = Math.min(ship.shield, damage);
-    ship.shield -= absorbed;
-    ship.hp = Math.max(0, ship.hp - Math.ceil(damage - absorbed));
+    const absorbed = missileId === undefined ? Math.min(ship.shield, damage) : 0;
+    const hull = Math.min(ship.hp, Math.ceil(damage - absorbed));
+    ship.hp -= hull;
+    if (missileId === undefined) {
+      ship.shield -= absorbed;
+      this.lastHitAt.set(ship, now);
+    }
+    const hit = {
+      target: id ?? effectId ?? `missile:${missileId}`,
+      x: ship.x, y: ship.y, hull, shield: absorbed,
+    };
+    if (attackerId && attackerId !== id) this.clients.getById(attackerId)?.send("damage:number", hit);
+    if (id) this.clients.getById(id)?.send("damage:number", { ...hit, incoming: true });
     if (ship.hp) return false;
+
+    if (missileId !== undefined) {
+      this.state.missiles.delete(missileId);
+      this.missileTargets.delete(missileId);
+      return true;
+    }
 
     if (id) {
       this.destinations.delete(id);
+      this.approaches.delete(id);
+      ship.landing = "";
       ship.attackTarget = "";
     }
     this.clock.setTimeout(() => {
@@ -261,10 +381,12 @@ class WorldRoom extends Room {
 
   onDrop(client) {
     this.destinations.delete(client.sessionId);
+    this.approaches.delete(client.sessionId);
     const player = this.state.players.get(client.sessionId);
     if (player) {
       player.online = false;
       player.attackTarget = "";
+      if (player.landing === "approach") player.landing = "";
     }
     this.allowReconnection(client, 120);
   }
@@ -283,6 +405,7 @@ class WorldRoom extends Room {
       if (!loadout.players.size) activeLoadouts.delete(characterId);
     }
     this.destinations.delete(client.sessionId);
+    this.approaches.delete(client.sessionId);
     this.state.players.delete(client.sessionId);
   }
 }

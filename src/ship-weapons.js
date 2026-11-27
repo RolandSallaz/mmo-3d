@@ -1,6 +1,6 @@
 import { BoxGeometry, CylinderGeometry, Group, Mesh, MeshStandardMaterial } from "three";
-import { LASER_MODELS } from "../shared/equipment.js";
-import { WEAPON_BARREL_HEIGHT, WEAPON_BARREL_REACH } from "../shared/ship-geometry.js";
+import { WEAPON_MODELS } from "../shared/equipment.js";
+import { MISSILE_TUBES, WEAPON_BARREL_HEIGHT, WEAPON_BARREL_REACH } from "../shared/ship-geometry.js";
 
 export function createShipWeaponModels() {
   const metal = new MeshStandardMaterial({ color: 0xb1c3d0, metalness: 0.52, roughness: 0.34 });
@@ -12,10 +12,10 @@ export function createShipWeaponModels() {
     mesh.position.set(x, y, z);
     group.add(mesh);
   };
-  const cylinder = (group, material, radius, start, end) => {
+  const cylinder = (group, material, radius, start, end, x = 0, y = WEAPON_BARREL_HEIGHT) => {
     const mesh = new Mesh(new CylinderGeometry(radius, radius, end - start, 10), material);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(0, WEAPON_BARREL_HEIGHT, -(start + end) / 2);
+    mesh.position.set(x, y, -(start + end) / 2);
     group.add(mesh);
   };
 
@@ -27,11 +27,21 @@ export function createShipWeaponModels() {
   }
 
   const weapons = {};
-  for (const [id, model] of Object.entries(LASER_MODELS)) {
+  for (const [id, model] of Object.entries(WEAPON_MODELS)) {
     const turret = new Group();
     const glow = new MeshStandardMaterial({ color: model.color, emissive: model.color, emissiveIntensity: 0.85 });
     const reach = WEAPON_BARREL_REACH[id];
     box(turret, metal, [0.35, 0.19, 0.43], [0, 0.2, 0.025]);
+    if (id === "missile") {
+      box(turret, casing, [0.56, 0.39, 0.63], [0, 0.34, -0.32]);
+      for (const [x, y] of MISSILE_TUBES) {
+        cylinder(turret, metal, 0.075, 0.53, reach, x, y);
+        cylinder(turret, inset, 0.056, reach - 0.018, reach + 0.003, x, y);
+        cylinder(turret, glow, 0.022, reach - 0.02, reach + 0.005, x, y);
+      }
+      weapons[id] = turret;
+      continue;
+    }
     if (id === "pulse") {
       box(turret, casing, [0.31, 0.2, 0.36], [0, 0.34, 0.02]);
       box(turret, glow, [0.15, 0.028, 0.23], [0, 0.451, 0.005]);

@@ -1,28 +1,59 @@
-import { engineModel } from "../shared/equipment.js";
+import { engineModel, WEAPON_MOUNTS } from "../shared/equipment.js";
 import {
   ITEMS, SHIP_SLOTS, canMoveInventoryItem, defaultInventoryDestination, inventoryItemAt,
 } from "../shared/inventory.js";
 
+const formatSeconds = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3 });
 const ICONS = ["engine", "shield", "scanner", "alloy", "pulse", "ion"];
 
 function itemIcon(item) {
   const icon = document.createElement("span");
   const index = ICONS.indexOf(ITEMS[item]?.icon ?? item);
-  icon.className = "inventory-icon";
+  icon.className = item === "missile" ? "inventory-icon missile-icon" : "inventory-icon";
   icon.setAttribute("aria-hidden", "true");
-  icon.style.backgroundPosition = `${index % 3 * 50}% ${Math.floor(index / 3) * 100}%`;
+  if (item !== "missile") icon.style.backgroundPosition = `${index % 3 * 50}% ${Math.floor(index / 3) * 100}%`;
   return icon;
 }
 
-export function setupInventory(beforeOpen) {
+export function setupInventory(beforeOpen, onSnapshot, onError) {
   const toggle = document.querySelector("#inventory-toggle");
   const dialog = document.querySelector("#inventory");
   const pilot = dialog.querySelector("#inventory-pilot");
+  const preview = dialog.querySelector("#inventory-ship-render");
+  const previewImage = dialog.querySelector(".ship-preview");
+  let previewRenderer;
+  let previewVersion = 0;
+
+  async function showShipPreview(equipment) {
+    const version = ++previewVersion;
+    try {
+      previewRenderer ??= import("./ship-model.js").then(({ createShipRenderer }) => createShipRenderer(218));
+      const render = await previewRenderer;
+      if (!render || version !== previewVersion || !dialog.open) return;
+      const sprite = { heading: 0 };
+      for (const { id, field } of WEAPON_MOUNTS) sprite[field] = equipment[id];
+      const source = render([{ x: 120, y: 120, sprite }], 240, 240, 1.5);
+      if (!source) return;
+      const canvas = preview.getContext("2d");
+      canvas.clearRect(0, 0, 240, 240);
+      canvas.drawImage(source, 0, 0, 240, 240);
+      preview.hidden = false;
+      previewImage.hidden = true;
+    } catch {
+      preview.hidden = true;
+      previewImage.hidden = false;
+    }
+  }
   const slots = dialog.querySelector("#ship-slots");
   const grid = dialog.querySelector("#cargo-grid");
   const count = dialog.querySelector("#cargo-count");
   const title = dialog.querySelector("#item-title");
   const description = dialog.querySelector("#item-description");
+  const weaponStats = dialog.querySelector("#weapon-stats");
+  const weaponDamageLabel = dialog.querySelector("#weapon-damage-label");
+  const weaponDamage = dialog.querySelector("#weapon-damage");
+  const weaponRange = dialog.querySelector("#weapon-range");
+  const weaponCooldown = dialog.querySelector("#weapon-cooldown");
   const action = dialog.querySelector("#item-action");
   const itemMenu = dialog.querySelector("#item-menu");
   const ghost = document.createElement("div");
@@ -64,6 +95,14 @@ export function setupInventory(beforeOpen) {
     title.textContent = item?.name ?? selectedSlot?.name ?? "";
     description.textContent = item?.description ??
       (selectedSlot ? "Свободный слот" : inventory ? "" : "Загружаем инвентарь…");
+    const isWeapon = item?.slot === "weapon";
+    weaponStats.hidden = !isWeapon;
+    if (isWeapon) {
+      weaponDamageLabel.textContent = item.salvo ? "Урон за залп" : "Урон";
+      weaponDamage.textContent = item.salvo ? `${item.salvo} × ${item.damage}` : String(item.damage);
+      weaponRange.textContent = `${item.range} ед.`;
+      weaponCooldown.textContent = `${formatSeconds.format(item.cooldown / 1000)} с`;
+    }
     action.hidden = !item || (typeof selection === "number" && !item.slot);
     action.disabled = pending || destination === undefined;
     action.textContent = typeof selection === "number" ? "Установить" : "Снять в грузовой отсек";
@@ -159,6 +198,7 @@ export function setupInventory(beforeOpen) {
   function render(snapshot) {
     cancelDrag();
     inventory = snapshot;
+    if (dialog.open) void showShipPreview(inventory.equipment);
     const engine = engineModel(inventory.equipment.engine);
     shipSpeed.textContent = `${engine.speed} ед/с`;
     shipTurn.textContent = `${Math.round(engine.turnSpeed * 180 / Math.PI)}°/с`;
@@ -285,6 +325,9 @@ export function setupInventory(beforeOpen) {
       room = nextRoom;
       toggle.hidden = true;
       dialog.close();
+      previewVersion++;
+      preview.hidden = true;
+      previewImage.hidden = false;
       cancelDrag();
       inventory = undefined;
       selection = undefined;
@@ -298,12 +341,16 @@ export function setupInventory(beforeOpen) {
 
       const boundRoom = room;
       room.onMessage("inventory:state", (snapshot) => {
-        if (room === boundRoom) render(snapshot);
+        if (room !== boundRoom) return;
+        render(snapshot);
+        onSnapshot(snapshot);
       });
       room.onMessage("inventory:error", (message) => {
         if (room !== boundRoom) return;
+        onError(message);
         pending = false;
         showSelection();
+        weaponStats.hidden = true;
         title.textContent = "Инвентарь";
         description.textContent = message;
         itemMenu.hidden = false;

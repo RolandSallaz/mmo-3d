@@ -15,6 +15,7 @@ const fragmentSource = `
   varying vec2 point;
   uniform sampler2D surface;
   uniform float rotation;
+  uniform vec2 sunDirection;
 
   void main() {
     float distanceFromCenter = length(point);
@@ -28,7 +29,7 @@ const fragmentSource = `
     float longitude = atan(dot(normal, east), dot(normal, forward));
     vec2 uv = vec2(longitude / 6.2831853 + 0.5 - rotation, 0.5 - latitude / 3.1415927);
 
-    vec3 sunlight = normalize(vec3(-0.74, 0.49, 0.45));
+    vec3 sunlight = normalize(vec3(sunDirection, 0.42));
     float light = dot(normal, sunlight);
     vec3 albedo = texture2D(surface, uv).rgb;
     vec3 color = albedo * (0.29 + 0.92 * smoothstep(-0.35, 0.9, light));
@@ -80,12 +81,14 @@ export async function createPlanetRenderer() {
   gl.generateMipmap(gl.TEXTURE_2D);
 
   const rotation = gl.getUniformLocation(program, "rotation");
+  const sunDirection = gl.getUniformLocation(program, "sunDirection");
   let lastFrame = -Infinity;
-  return (time) => {
+  return (time, lightX, lightY) => {
     if (gl.isContextLost()) return null;
     if (time - lastFrame >= 40) {
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform1f(rotation, (time % 90_000) / 90_000);
+      gl.uniform2f(sunDirection, lightX, lightY);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       lastFrame = time;
     }

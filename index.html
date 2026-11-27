@@ -15,8 +15,12 @@
         <button id="join" type="submit">Начать игру</button>
       </form>
       <p id="status" role="status"></p>
-      <p id="flight-help" hidden>ЛКМ — курс · ПКМ по кораблю — автоатака</p>
-      <button id="inventory-toggle" type="button" aria-haspopup="dialog" hidden>Инвентарь</button>
+      <p id="flight-help" hidden>ЛКМ — цель или курс · Shift + ЛКМ — прямой курс · Пробел — огонь · Колесо — зум</p>
+      <p id="target-status" hidden></p>
+      <button id="inventory-toggle" type="button" aria-label="Инвентарь" aria-haspopup="dialog" aria-controls="inventory" hidden>
+        <span class="cargo-icon" aria-hidden="true"></span>
+        <span class="inventory-toggle-tooltip" aria-hidden="true">Инвентарь</span>
+      </button>
       <dialog id="inventory" aria-labelledby="inventory-title">
         <header class="inventory-header">
           <h2 id="inventory-title">Инвентарь</h2>
@@ -35,6 +39,7 @@
             <div class="ship-schematic" role="group" aria-label="Слоты корабля">
               <div class="ship-display">
                 <img class="ship-preview" src="/src/ship-profile.webp" width="480" height="480" alt="Лёгкий разведчик">
+                <canvas id="inventory-ship-render" width="240" height="240" aria-label="Корабль с установленным оборудованием" hidden></canvas>
               </div>
               <div id="ship-slots" class="ship-slots"></div>
             </div>
@@ -50,6 +55,11 @@
                 <strong id="item-title"></strong>
                 <p id="item-description"></p>
               </div>
+              <dl id="weapon-stats" class="weapon-stats" hidden>
+                <div><dt id="weapon-damage-label">Урон</dt><dd id="weapon-damage"></dd></div>
+                <div><dt>Дальность орудия</dt><dd id="weapon-range"></dd></div>
+                <div><dt>Перезарядка</dt><dd id="weapon-cooldown"></dd></div>
+              </dl>
               <button id="item-action" type="button" hidden></button>
               <button id="item-menu-close" type="button" aria-label="Закрыть информацию о предмете">×</button>
             </aside>
@@ -57,7 +67,28 @@
         </div>
       </dialog>
       <button id="fullscreen" type="button" title="F" hidden>На весь экран</button>
+      <button id="sound-toggle" type="button" aria-label="Звук" hidden></button>
       <canvas id="world" width="640" height="640" aria-label="Космическое поле" hidden></canvas>
+      <div id="landing-transition" hidden>
+        <p role="status">Вход в атмосферу Люмены</p>
+      </div>
+      <section id="planet-surface" aria-labelledby="planet-title" hidden>
+        <div class="planet-surface-scene" aria-hidden="true"></div>
+        <div class="planet-surface-panel">
+          <h2 id="planet-title">Люмена</h2>
+          <div class="planet-actions">
+            <button id="planet-buy" type="button" aria-controls="planet-market" aria-expanded="false"><span class="planet-action-icon" aria-hidden="true">↓</span>Купить</button>
+            <button id="planet-sell" type="button" aria-controls="planet-market" aria-expanded="false"><span class="planet-action-icon" aria-hidden="true">↑</span>Продать</button>
+            <button id="planet-launch" type="button"><span aria-hidden="true">↗</span> Взлететь</button>
+          </div>
+          <section id="planet-market" aria-labelledby="planet-market-title" hidden>
+            <h3 id="planet-market-title"></h3>
+            <p id="planet-market-status" role="status"></p>
+            <ul id="planet-market-items"></ul>
+            <p>Сделки пока недоступны.</p>
+          </section>
+        </div>
+      </section>
       <div id="object-tooltip" hidden>
         <strong id="object-name"></strong>
         <span id="object-health" hidden></span>

@@ -34,7 +34,6 @@ export const LASER_MODELS = {
     name: "Луч ЛП‑2",
     icon: "pulse",
     range: 430,
-    fireCone: 70,
     damage: 18,
     cooldown: 390,
     color: "#ffad45",
@@ -50,3 +49,16 @@ export const LASER_MODELS = {
     lifetime: 245,
   },
 };
+
+export const MISSILE_MODEL = {
+  name: "Вихрь РК‑5", icon: "pulse", color: "#8cffa9",
+  range: 700, damage: 8, cooldown: 2300, salvo: 5, missileHp: 10,
+};
+
+export const WEAPON_MODELS = { ...LASER_MODELS, missile: MISSILE_MODEL };
+
+export const WEAPON_MOUNTS = [
+  { id: "weapon-left", field: "weaponLeft" },
+  { id: "weapon-right", field: "weaponRight" },
+  { id: "weapon-nose", field: "weaponNose" },
+];

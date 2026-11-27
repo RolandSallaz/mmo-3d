@@ -1,4 +1,4 @@
-import { ENGINE_MODELS, LASER_MODELS, SHIELD_MODELS } from "./equipment.js";
+import { ENGINE_MODELS, LASER_MODELS, MISSILE_MODEL, SHIELD_MODELS, WEAPON_MOUNTS } from "./equipment.js";
 
 export const CARGO_SIZE = 24;
 
@@ -6,8 +6,9 @@ export const SHIP_SLOTS = [
   { id: "engine", type: "engine", name: "Двигатель", icon: "engine" },
   { id: "shield", type: "shield", name: "Щит", icon: "shield" },
   { id: "module", type: "module", name: "Модуль", icon: "scanner" },
-  { id: "weapon-left", type: "weapon", name: "Левое оружие", icon: "pulse" },
-  { id: "weapon-right", type: "weapon", name: "Правое оружие", icon: "pulse" },
+  ...WEAPON_MOUNTS.map(({ id }, index) => ({
+    id, type: "weapon", name: ["Левое оружие", "Правое оружие", "Носовое оружие"][index], icon: "pulse",
+  })),
 ];
 
 export const ITEMS = {
@@ -15,8 +16,9 @@ export const ITEMS = {
   shield: { ...SHIELD_MODELS.shield, slot: "shield", description: "Генератор сферического энергетического поля вокруг корпуса." },
   scanner: { name: "Сканер сектора", slot: "module", description: "Бортовой модуль для исследования пространства." },
   alloy: { name: "Титановый сплав", description: "Материал для ремонта и производства." },
-  pulse: { ...LASER_MODELS.pulse, slot: "weapon", description: `Импульсная лазерная пушка. Дальность 430 ед. Урон 18. Перезарядка 0,39 с. Сектор стрельбы ${LASER_MODELS.pulse.fireCone}° вперёд.` },
-  ion: { ...LASER_MODELS.ion, slot: "weapon", description: "Фиолетовый дальнобойный лазер. Дальность 545 ед. Урон 28. Перезарядка 0,65 с. Круговой сектор стрельбы." },
+  pulse: { ...LASER_MODELS.pulse, slot: "weapon", description: "Импульсная лазерная пушка." },
+  ion: { ...LASER_MODELS.ion, slot: "weapon", description: "Фиолетовый дальнобойный лазер." },
+  missile: { ...MISSILE_MODEL, slot: "weapon", description: "Пять ракет веером с наведением на выбранный корабль." },
 };
 
 function shipSlot(position) {
