@@ -8,7 +8,11 @@
   <body>
     <main>
       <h1>MMO 3D</h1>
-      <button id="join" type="button">Войти в тестовую комнату</button>
+      <form id="menu">
+        <label for="nickname">Ник</label>
+        <input id="nickname" name="nickname" type="text" autocomplete="nickname" required maxlength="24">
+        <button id="join" type="submit">Начать игру</button>
+      </form>
       <p id="status" role="status"></p>
     </main>
     <script type="module" src="/src/main.js"></script>

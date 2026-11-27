@@ -1,20 +1,27 @@
-import { Room, defineRoom, defineServer } from "@colyseus/core";
+import { ErrorCode, Room, ServerError, defineRoom, defineServer } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { schema } from "@colyseus/schema";
 
-const WorldState = schema({ players: ["string"] });
+const WorldState = schema({ players: { map: "string" } });
 
 class WorldRoom extends Room {
   maxClients = 32;
   state = new WorldState();
 
-  onJoin(client) {
-    this.state.players.push(client.sessionId);
+  static async onAuth(_token, options) {
+    const nickname = typeof options.nickname === "string" ? options.nickname.trim() : "";
+    if (!nickname || nickname.length > 24) {
+      throw new ServerError(ErrorCode.AUTH_FAILED, "Nickname must be 1–24 characters.");
+    }
+    return { nickname };
+  }
+
+  onJoin(client, _options, { nickname }) {
+    this.state.players.set(client.sessionId, nickname);
   }
 
   onLeave(client) {
-    const index = this.state.players.indexOf(client.sessionId);
-    if (index >= 0) this.state.players.splice(index, 1);
+    this.state.players.delete(client.sessionId);
   }
 }
 
