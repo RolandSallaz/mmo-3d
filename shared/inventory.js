@@ -15,8 +15,8 @@ export const ITEMS = {
   shield: { ...SHIELD_MODELS.shield, slot: "shield", description: "Генератор сферического энергетического поля вокруг корпуса." },
   scanner: { name: "Сканер сектора", slot: "module", description: "Бортовой модуль для исследования пространства." },
   alloy: { name: "Титановый сплав", description: "Материал для ремонта и производства." },
-  pulse: { ...LASER_MODELS.pulse, slot: "weapon", description: "Импульсная лазерная пушка. Дальность 430 ед. Урон 18. Перезарядка 0,39 с." },
-  ion: { ...LASER_MODELS.ion, slot: "weapon", description: "Фиолетовый дальнобойный лазер. Дальность 545 ед. Урон 28. Перезарядка 0,65 с." },
+  pulse: { ...LASER_MODELS.pulse, slot: "weapon", description: `Импульсная лазерная пушка. Дальность 430 ед. Урон 18. Перезарядка 0,39 с. Сектор стрельбы ${LASER_MODELS.pulse.fireCone}° вперёд.` },
+  ion: { ...LASER_MODELS.ion, slot: "weapon", description: "Фиолетовый дальнобойный лазер. Дальность 545 ед. Урон 28. Перезарядка 0,65 с. Круговой сектор стрельбы." },
 };
 
 function shipSlot(position) {

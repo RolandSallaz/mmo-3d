@@ -2,13 +2,27 @@ import { engineModel } from "./equipment.js";
 
 export const FLIGHT_TICK_MS = 1000 / 30;
 
+function headingDifference(from, to) {
+  const difference = to - from;
+  return Math.atan2(Math.sin(difference), Math.cos(difference));
+}
+
+export function turnToward(ship, target, seconds) {
+  const dx = target.x - ship.x;
+  const dy = target.y - ship.y;
+  if (!dx && !dy) return;
+  const heading = Math.atan2(dx, -dy);
+  const turn = headingDifference(ship.heading, heading);
+  const limit = engineModel(ship.engineModel).turnSpeed * seconds;
+  ship.heading = Math.abs(turn) <= limit ? heading : ship.heading + Math.sign(turn) * limit;
+}
+
 export function advanceFlight(ship, destination, seconds, worldSize) {
   const dx = destination.x - ship.x;
   const dy = destination.y - ship.y;
   const distance = Math.hypot(dx, dy);
   const heading = Math.atan2(dx, -dy);
-  const difference = heading - ship.heading;
-  const turn = Math.atan2(Math.sin(difference), Math.cos(difference));
+  const turn = headingDifference(ship.heading, heading);
   const engine = engineModel(ship.engineModel);
   const turnLimit = engine.turnSpeed * seconds;
   const steering = Math.max(-turnLimit, Math.min(turnLimit, turn));

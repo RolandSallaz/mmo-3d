@@ -34,6 +34,7 @@ export const LASER_MODELS = {
     name: "Луч ЛП‑2",
     icon: "pulse",
     range: 430,
+    fireCone: 70,
     damage: 18,
     cooldown: 390,
     color: "#ffad45",

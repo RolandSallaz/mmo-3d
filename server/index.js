@@ -3,8 +3,8 @@ import { fireLasers } from "./laser.js";
 import { ErrorCode, Room, ServerError, defineRoom, defineServer } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { schema } from "@colyseus/schema";
-import { SHIELD_MODELS } from "../shared/equipment.js";
-import { advanceFlight, FLIGHT_TICK_MS } from "../shared/flight.js";
+import { LASER_MODELS, SHIELD_MODELS } from "../shared/equipment.js";
+import { advanceFlight, FLIGHT_TICK_MS, turnToward } from "../shared/flight.js";
 import { planetPosition } from "../shared/world.js";
 
 import { applyInventoryMove, getInventory, initializeInventoryStore, loadCharacter } from "./inventory-store.js";
@@ -17,6 +17,8 @@ const PIRATE_START_ANGLE = Math.PI * 0.42;
 const PLAYER_HP = 100;
 const PIRATE_HP = 150;
 const TEST_SHIP_HP = 110;
+const PURSUIT_DISTANCE = 145;
+const ATTACK_DISTANCE = 170;
 const RESPAWN_MS = 5000;
 const SHIELD_RECHARGE_DELAY = 3800;
 const SHIELD_RECHARGE_RATE = 15;
@@ -29,8 +31,9 @@ function placePirate(pirate, angle) {
   pirate.y = PLANET.y + sin * PIRATE_ORBIT_RADIUS;
   pirate.heading = Math.atan2(-sin, -cos);
 }
-const Player = schema({ nickname: "string", x: "float32", y: "float32", heading: "float32", online: "boolean", engineModel: "string", shieldModel: "string", ...HULL });
-const TestShip = schema({ x: "float32", y: "float32", heading: "float32", shieldModel: "string", ...HULL });
+const WEAPON_SLOTS = { weaponLeft: "string", weaponRight: "string" };
+const Player = schema({ nickname: "string", x: "float32", y: "float32", heading: "float32", online: "boolean", attackTarget: "string", engineModel: "string", shieldModel: "string", ...HULL, ...WEAPON_SLOTS });
+const TestShip = schema({ x: "float32", y: "float32", heading: "float32", shieldModel: "string", ...HULL, ...WEAPON_SLOTS });
 const WorldState = schema({ size: "uint32", players: { map: Player }, testShip: TestShip, pirate: TestShip });
 const spawnPoints = Array.from({ length: 36 }, (_, index) => {
   const cell = (index + 14) % 36;
@@ -49,14 +52,14 @@ function updateLoadout(characterId, { equipment, revision }) {
     loadout.revision = revision;
     loadout.engineModel = equipment.engine ?? "";
     loadout.shieldModel = equipment.shield ?? "";
-    loadout.weapons = {
-      "weapon-left": equipment["weapon-left"],
-      "weapon-right": equipment["weapon-right"],
-    };
+    loadout.weaponLeft = equipment["weapon-left"] ?? "";
+    loadout.weaponRight = equipment["weapon-right"] ?? "";
   }
   for (const player of loadout.players) {
     player.engineModel = loadout.engineModel;
     player.shieldModel = loadout.shieldModel;
+    player.weaponLeft = loadout.weaponLeft;
+    player.weaponRight = loadout.weaponRight;
     player.maxShield = SHIELD_MODELS[loadout.shieldModel]?.capacity ?? 0;
     player.shield = Math.min(player.shield, player.maxShield);
   }
@@ -93,33 +96,26 @@ class WorldRoom extends Room {
       sendInventory(client, () => getInventory(client.auth.characterId)));
     this.onMessage("inventory:move", (client, message) =>
       sendInventory(client, () => applyInventoryMove(client.auth.characterId, message)));
-    this.onMessage("laser:fire", (client, aim) => {
+    this.onMessage("attack", (client, targetId) => {
       const player = this.state.players.get(client.sessionId);
-      if (!player?.online || !player.hp || !Number.isFinite(aim?.x) || !Number.isFinite(aim?.y) ||
-          aim.x < 0 || aim.x > WORLD_SIZE || aim.y < 0 || aim.y > WORLD_SIZE ||
-          Math.hypot(aim.x - player.x, aim.y - player.y) < 2) return;
-      const readyAt = this.laserReadyAt.get(client.sessionId) ?? [0, 0];
-      const weapons = activeLoadouts.get(client.auth.characterId)?.weapons;
-      const targets = [{ ship: this.state.pirate }, { ship: this.state.testShip }];
-      for (const [id, ship] of this.state.players) {
-        if (id !== client.sessionId && ship.online) targets.push({ id, ship });
+      if (!player?.online || !player.hp) return;
+      if (targetId === "") {
+        player.attackTarget = "";
+        return;
       }
-      const now = performance.now();
-      const shots = fireLasers(player, aim, weapons, readyAt, now, targets, WORLD_SIZE);
-      if (!shots.length) return;
-
-      this.laserReadyAt.set(client.sessionId, readyAt);
-      this.broadcast("laser:shots", shots.map(({ target, damage, ...shot }) => {
-        const destroyed = target ? this.damageShip(target, damage, now) : false;
-        return { ...shot, hit: Boolean(target), destroyed };
-      }));
+      if (!this.findAttackTarget(client.sessionId, targetId)) return;
+      this.destinations.delete(client.sessionId);
+      player.attackTarget = targetId;
     });
     this.onMessage("move", (client, destination) => {
       const x = destination?.x;
       const y = destination?.y;
+      const player = this.state.players.get(client.sessionId);
       if (!Number.isFinite(x) || !Number.isFinite(y) ||
           x < 0 || x > WORLD_SIZE || y < 0 || y > WORLD_SIZE ||
-          !this.state.players.get(client.sessionId)?.hp) return;
+          !player?.online || !player.hp) return;
+
+      player.attackTarget = "";
 
       this.destinations.set(client.sessionId, { x, y });
     });
@@ -137,7 +133,63 @@ class WorldRoom extends Room {
           this.destinations.delete(id);
         }
       }
+      for (const client of this.clients) {
+        const player = this.state.players.get(client.sessionId);
+        if (player?.online && player.hp && player.attackTarget) {
+          this.updateAttack(client, player, seconds, now);
+        }
+      }
     }, FLIGHT_TICK_MS);
+  }
+
+  findAttackTarget(attackerId, targetId) {
+    if (typeof targetId !== "string" || targetId === attackerId) return;
+    if (targetId === "npc:pirate" || targetId === "npc:test") {
+      const ship = targetId === "npc:pirate" ? this.state.pirate : this.state.testShip;
+      return ship.hp ? { ship } : undefined;
+    }
+    const ship = this.state.players.get(targetId);
+    if (ship?.online && ship.hp) return { id: targetId, ship };
+  }
+
+  updateAttack(client, player, seconds, now) {
+    const target = this.findAttackTarget(client.sessionId, player.attackTarget);
+    if (!target) {
+      player.attackTarget = "";
+      return;
+    }
+
+    const dx = target.ship.x - player.x;
+    const dy = target.ship.y - player.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > PURSUIT_DISTANCE) {
+      const approach = (distance - PURSUIT_DISTANCE) / distance;
+      advanceFlight(player, { x: player.x + dx * approach, y: player.y + dy * approach }, seconds, WORLD_SIZE);
+    } else if (LASER_MODELS[player.weaponLeft]?.fireCone !== undefined ||
+               LASER_MODELS[player.weaponRight]?.fireCone !== undefined) {
+      turnToward(player, target.ship, seconds);
+    }
+    if (Math.hypot(target.ship.x - player.x, target.ship.y - player.y) > ATTACK_DISTANCE) return;
+
+    const readyAt = this.laserReadyAt.get(client.sessionId) ?? [0, 0];
+    const shots = fireLasers(player, target.ship, readyAt, now, WORLD_SIZE);
+    if (!shots.length) return;
+
+    this.laserReadyAt.set(client.sessionId, readyAt);
+    const effects = [];
+    for (const { damage, slotIndex, cooldown, ...shot } of shots) {
+      readyAt[slotIndex] = now + cooldown;
+      const destroyed = this.damageShip(target, damage, now);
+      effects.push({
+        ...shot, shooterId: client.sessionId, slotIndex, hit: true, destroyed,
+        explosion: destroyed ? { x: target.ship.x, y: target.ship.y } : undefined,
+      });
+      if (destroyed) {
+        player.attackTarget = "";
+        break;
+      }
+    }
+    this.broadcast("laser:shots", effects);
   }
 
   rechargeShield(ship, seconds, now) {
@@ -154,7 +206,10 @@ class WorldRoom extends Room {
     ship.hp = Math.max(0, ship.hp - Math.ceil(damage - absorbed));
     if (ship.hp) return false;
 
-    if (id) this.destinations.delete(id);
+    if (id) {
+      this.destinations.delete(id);
+      ship.attackTarget = "";
+    }
     this.clock.setTimeout(() => {
       if (id && this.state.players.get(id) !== ship) return;
       if (id) {
@@ -192,7 +247,7 @@ class WorldRoom extends Room {
   onJoin(client, _options, auth) {
     const { nickname, characterId } = auth;
     const player = new Player({
-      nickname, ...this.findSpawn(), heading: 0, online: true,
+      nickname, ...this.findSpawn(), heading: 0, online: true, attackTarget: "",
       hp: PLAYER_HP, maxHp: PLAYER_HP, shield: 0, maxShield: 0,
     });
     if (!activeLoadouts.has(characterId)) {
@@ -207,7 +262,10 @@ class WorldRoom extends Room {
   onDrop(client) {
     this.destinations.delete(client.sessionId);
     const player = this.state.players.get(client.sessionId);
-    if (player) player.online = false;
+    if (player) {
+      player.online = false;
+      player.attackTarget = "";
+    }
     this.allowReconnection(client, 120);
   }
 

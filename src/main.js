@@ -1,6 +1,7 @@
 import { Client } from "@colyseus/sdk";
 import { engineModel, SHIELD_MODELS } from "../shared/equipment.js";
 import { drawShieldShell } from "./shield-effect.js";
+import { SHIP_SPRITE_SIZE as SHIP_SIZE, laserMuzzle } from "../shared/ship-geometry.js";
 import { drawLaserShots, receiveLaserShots } from "./laser-effect.js";
 import { setupInventory } from "./inventory.js";
 import { advanceFlight, FLIGHT_TICK_MS } from "../shared/flight.js";
@@ -22,7 +23,6 @@ const objectHealth = document.querySelector("#object-health");
 const flightHelp = document.querySelector("#flight-help");
 const fullscreenButton = document.querySelector("#fullscreen");
 const STAR_TILE_SIZE = 640;
-const SHIP_SIZE = 64;
 const SHIP_FRAME_SIZE = 112;
 const SHIP_FRAME_COLUMNS = 8;
 const SHIP_FRAME_STEP = 2 * Math.PI / shipFrames.length;
@@ -100,13 +100,10 @@ let localSprite;
 let worldSize;
 const inventoryPanel = setupInventory(() => {
   stopSteering();
-  stopFiring();
   clearHover();
 });
 let flightDestination;
 const laserEffects = [];
-let firePointer;
-let fireTimer;
 let testShip;
 let pirateShip;
 let hoverPointer;
@@ -115,36 +112,33 @@ new ResizeObserver(() => {
   if (!world.hidden && !frame) frame = requestAnimationFrame(drawWorld);
 }).observe(world);
 
-function aimAt(clientX, clientY) {
-  const bounds = world.getBoundingClientRect();
-  return {
-    x: Math.max(0, Math.min(worldSize, localSprite.x + clientX - bounds.left - bounds.width / 2)),
-    y: Math.max(0, Math.min(worldSize, localSprite.y + clientY - bounds.top - bounds.height / 2)),
-  };
-}
-
-function stopFiring() {
-  clearInterval(fireTimer);
-  firePointer = undefined;
-}
-
-function fireTowardPointer() {
-  if (activeRoom && localSprite?.hp && firePointer) {
-    activeRoom.send("laser:fire", aimAt(firePointer.x, firePointer.y));
+function shipAt(x, y, includeLocal = false) {
+  let nearest = SHIP_HIT_RADIUS;
+  let target;
+  for (const sprite of [testShip, pirateShip, ...visiblePlayers.values()]) {
+    if (!sprite?.hp || (!includeLocal && sprite.local)) continue;
+    const distance = Math.hypot(sprite.x - x, sprite.y - y);
+    if (distance < nearest) {
+      nearest = distance;
+      target = sprite;
+    }
   }
+  return target;
 }
 
 world.addEventListener("contextmenu", (event) => event.preventDefault());
-world.addEventListener("mousedown", (event) => {
-  if (event.button !== 2 || !activeRoom || !localSprite?.hp || firePointer) return;
-  event.preventDefault();
-  firePointer = { x: event.clientX, y: event.clientY };
-  fireTowardPointer();
-  fireTimer = setInterval(fireTowardPointer, 65);
-});
-world.addEventListener("mouseleave", stopFiring);
-window.addEventListener("mouseup", (event) => {
-  if (event.button === 2) stopFiring();
+world.addEventListener("pointerdown", (event) => {
+  if (event.button !== 2 || !activeRoom || !localSprite?.hp) return;
+  const bounds = world.getBoundingClientRect();
+  const target = shipAt(
+    localSprite.x + event.clientX - bounds.left - bounds.width / 2,
+    localSprite.y + event.clientY - bounds.top - bounds.height / 2,
+  );
+  if (target) {
+    stopSteering();
+    flightDestination = undefined;
+  }
+  activeRoom.send("attack", target?.id ?? "");
 });
 
 function setDestination(x, y) {
@@ -185,7 +179,6 @@ world.addEventListener("pointerdown", (event) => {
 
 world.addEventListener("pointermove", (event) => {
   if (event.pointerType === "mouse") {
-    if (firePointer) firePointer = { x: event.clientX, y: event.clientY };
     hoverPointer = { x: event.clientX, y: event.clientY };
     const nearRight = event.clientX + 200 > world.clientWidth;
     const nearBottom = event.clientY + 92 > world.clientHeight;
@@ -214,7 +207,6 @@ function clearHover() {
 world.addEventListener("pointerleave", clearHover);
 window.addEventListener("blur", () => {
   stopSteering();
-  stopFiring();
   clearHover();
 });
 let mapBounds;
@@ -372,10 +364,20 @@ function drawWorld(time) {
   drawMinimap(width, height, planetX, planetY);
 
   drawFlightPath(centerX, centerY);
-  if (drawLaserShots(context, laserEffects, centerX - localSprite.x, centerY - localSprite.y, time)) animating = true;
   context.font = "13px system-ui";
   context.textAlign = "center";
   if (drawShips(time, width, height, ratio)) animating = true;
+  const targetId = localSprite.attackTarget;
+  const target = targetId === "npc:pirate" ? pirateShip
+    : targetId === "npc:test" ? testShip : visiblePlayers.get(targetId);
+  if (target?.hp) {
+    context.strokeStyle = "#ff7587";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(centerX + target.x - localSprite.x, centerY + target.y - localSprite.y,
+      SHIP_HIT_RADIUS + 9, 0, Math.PI * 2);
+    context.stroke();
+  }
   drawObjectHover(centerX, centerY, planetVisible ? {
     x: planetLeft + PLANET_RADIUS,
     y: planetTop + PLANET_RADIUS,
@@ -418,19 +420,16 @@ function drawFlightPath(centerX, centerY) {
 function drawObjectHover(centerX, centerY, planetTarget) {
   let target;
   if (hoverPointer) {
-    let nearestShip = SHIP_HIT_RADIUS;
-    const findShip = (sprite) => {
-      if (!sprite.hp) return;
-      const x = centerX + (sprite.x - localSprite.x);
-      const y = centerY + (sprite.y - localSprite.y);
-      const distance = Math.hypot(hoverPointer.x - x, hoverPointer.y - y);
-      if (distance >= nearestShip) return;
-      nearestShip = distance;
-      target = { x, y, radius: SHIP_HIT_RADIUS, label: sprite.hoverLabel ?? sprite.nickname, ship: sprite };
-    };
-    if (testShip) findShip(testShip);
-    if (pirateShip) findShip(pirateShip);
-    for (const player of visiblePlayers.values()) findShip(player);
+    const ship = shipAt(localSprite.x + hoverPointer.x - centerX, localSprite.y + hoverPointer.y - centerY, true);
+    if (ship) {
+      target = {
+        x: centerX + ship.x - localSprite.x,
+        y: centerY + ship.y - localSprite.y,
+        radius: SHIP_HIT_RADIUS,
+        label: ship.hoverLabel ?? ship.nickname,
+        ship,
+      };
+    }
 
     if (!target && planetTarget &&
         Math.hypot(hoverPointer.x - planetTarget.x, hoverPointer.y - planetTarget.y) <= planetTarget.radius) {
@@ -465,6 +464,8 @@ function copyHull(sprite, ship) {
   sprite.shield = ship.shield;
   sprite.maxShield = ship.maxShield;
   sprite.shieldModel = ship.shieldModel;
+  sprite.weaponLeft = ship.weaponLeft;
+  sprite.weaponRight = ship.weaponRight;
 }
 
 function drawShips(time, width, height, ratio) {
@@ -507,6 +508,15 @@ function drawShips(time, width, height, ratio) {
   }
   if (models) context.drawImage(models, 0, 0, width, height);
 
+  const lasersVisible = drawLaserShots(context, laserEffects, width / 2 - localSprite.x,
+    height / 2 - localSprite.y, time, (shot) => {
+      const shooter = visiblePlayers.get(shot.shooterId);
+      if (!shooter?.hp) return shot;
+      const heading = models ? shooter.heading : Math.round(shooter.heading / SHIP_FRAME_STEP) * SHIP_FRAME_STEP;
+      const muzzle = laserMuzzle(heading, shot.slotIndex, shot.modelId);
+      return { x: shooter.x + muzzle.x, y: shooter.y + muzzle.y };
+    });
+
   let showShield = false;
   for (const { sprite, x, y } of entries) {
     const shield = SHIELD_MODELS[sprite.shieldModel];
@@ -527,7 +537,7 @@ function drawShips(time, width, height, ratio) {
       context.fillRect(x - 19, textY + 4, 38 * sprite.hp / sprite.maxHp, 3);
     }
   }
-  return showShield;
+  return showShield || lasersVisible;
 }
 window.render_game_to_text = () => JSON.stringify({
   mode: world.hidden ? "menu" : "world",
@@ -612,7 +622,6 @@ async function connect(nickname, reconnectionToken) {
     });
     room.onDrop(() => {
       stopSteering();
-      stopFiring();
       flightDestination = undefined;
     });
     activeRoom = room;
@@ -625,6 +634,7 @@ async function connect(nickname, reconnectionToken) {
       worldSize = state.size;
       const stationShip = state.testShip;
       testShip = stationShip && {
+        id: "npc:test",
         x: stationShip.x,
         y: stationShip.y,
         heading: stationShip.heading,
@@ -637,6 +647,7 @@ async function connect(nickname, reconnectionToken) {
       const pirate = state.pirate;
       if (pirate) {
         pirateShip ??= {
+          id: "npc:pirate",
           x: pirate.x, y: pirate.y, heading: pirate.heading,
           nickname: "Ржавый Клык", hoverLabel: "Пират · Ржавый Клык",
           model: "pirate", labelColor: "#ff7587",
@@ -653,6 +664,7 @@ async function connect(nickname, reconnectionToken) {
       for (const [id, player] of state.players) {
         if (!player.online && id !== room.sessionId) continue;
         const sprite = visiblePlayers.get(id) ?? {
+          id,
           x: player.x,
           y: player.y,
           heading: player.heading ?? 0,
@@ -665,7 +677,10 @@ async function connect(nickname, reconnectionToken) {
         sprite.targetY = player.y;
         sprite.targetHeading = player.heading ?? 0;
         visiblePlayers.set(id, sprite);
-        if (sprite.local) localSprite = sprite;
+        if (sprite.local) {
+          sprite.attackTarget = localPlayer.attackTarget;
+          localSprite = sprite;
+        }
       }
       const hull = `Прочность ${localPlayer.hp}/${localPlayer.maxHp} · Щит ${Math.ceil(localPlayer.shield)}/${localPlayer.maxShield}`;
       const statusText = `${localPlayer.nickname} · ${hull} · Игроков: ${visiblePlayers.size}` +
@@ -673,7 +688,6 @@ async function connect(nickname, reconnectionToken) {
       if (status.textContent !== statusText) status.textContent = statusText;
       if (!localPlayer.hp) {
         stopSteering();
-        stopFiring();
         flightDestination = undefined;
       }
       flightHelp.hidden = false;
@@ -684,7 +698,6 @@ async function connect(nickname, reconnectionToken) {
     });
     room.onLeave(() => {
       stopSteering();
-      stopFiring();
       laserEffects.length = 0;
       flightHelp.hidden = true;
       sessionStorage.removeItem(sessionKey);
